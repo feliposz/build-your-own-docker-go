@@ -37,6 +37,7 @@ func main() {
 	if err != nil {
 		log.Fatal("making temp directory: ", err)
 	}
+	defer os.RemoveAll(tempDir)
 
 	log.Println("preparing chroot environment")
 	commandPath, err := filepath.Abs(command)
@@ -76,11 +77,7 @@ func main() {
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 
-	//os.RemoveAll(tempDir)
-
-	if exitCode != 0 {
-		os.Exit(exitCode)
-	}
+	os.Exit(exitCode)
 }
 
 func copyFile(src, dest string) error {
@@ -155,7 +152,49 @@ func getDockerImage(image string) error {
 	var manifest Manifest
 	json.Unmarshal(manifestData, &manifest)
 
-	fmt.Println(manifest)
+	imagesDir := "mydocker-images"
+
+	err = os.Mkdir(imagesDir, 0755)
+	if err != nil {
+		if !os.IsExist(err) {
+			return err
+		}
+	}
+
+	for _, layer := range manifest.Layers {
+		layerPath := filepath.Join(imagesDir, strings.Replace(layer.Digest, ":", "_", 1))
+
+		_, err := os.Stat(layerPath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+		} else {
+			log.Println("skipping download for layer ", layer.Digest)
+			continue
+		}
+
+		file, err := os.Create(layerPath)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+
+		log.Println("downloading layer ", layer.Digest)
+		layerReq, err := http.NewRequest("GET", fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/blobs/%s", parts[0], layer.Digest), nil)
+		layerReq.Header.Add("Authorization", fmt.Sprintf("Bearer %s", auth.Token))
+		layerReq.Header.Add("Accept", layer.MediaType)
+		layerResp, err := http.DefaultClient.Do(layerReq)
+		if err != nil {
+			return err
+		}
+		defer layerResp.Body.Close()
+		layerData, err := io.ReadAll(layerResp.Body)
+		if err != nil {
+			return err
+		}
+		file.Write(layerData)
+	}
 
 	return nil
 }
