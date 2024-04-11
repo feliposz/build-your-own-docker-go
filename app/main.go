@@ -58,6 +58,7 @@ func main() {
 	cmd.Stdout = os.Stdout
 	cmd.SysProcAttr = &syscall.SysProcAttr{}
 	cmd.SysProcAttr.Chroot = tempDir
+	cmd.SysProcAttr.Cloneflags = syscall.CLONE_NEWPID
 
 	exitCode := 0
 	err = cmd.Run()
