@@ -30,7 +30,10 @@ func main() {
 	command := os.Args[3]
 	args := os.Args[4:len(os.Args)]
 
-	getDockerImage(image)
+	_, _, err = getDockerImage(image)
+	if err != nil {
+		log.Fatal("getting docker image: ", err)
+	}
 
 	log.Println("making temp dir")
 	tempDir, err := os.MkdirTemp(os.TempDir(), "mydocker")
@@ -163,7 +166,7 @@ type ConfigRootFS struct {
 	DiffIDs []string `json:"diff_ids"`
 }
 
-func getDockerImage(image string) error {
+func getDockerImage(image string) (manifest Manifest, config Config, err error) {
 	parts := strings.Split(image, ":")
 	if len(parts) == 1 {
 		parts = append(parts, "latest")
@@ -176,13 +179,13 @@ func getDockerImage(image string) error {
 
 	authResp, err := http.Get(fmt.Sprintf("https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/%s:pull", parts[0]))
 	if err != nil {
-		return err
+		return
 	}
 	defer authResp.Body.Close()
 
 	authData, err := io.ReadAll(authResp.Body)
 	if err != nil {
-		return err
+		return
 	}
 	var auth Auth
 	json.Unmarshal(authData, &auth)
@@ -196,14 +199,13 @@ func getDockerImage(image string) error {
 	manifestReq.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v2+json")
 	manifestResp, err := http.DefaultClient.Do(manifestReq)
 	if err != nil {
-		return err
+		return
 	}
 	defer manifestResp.Body.Close()
 	manifestData, err := io.ReadAll(manifestResp.Body)
 	if err != nil {
-		return err
+		return
 	}
-	var manifest Manifest
 	json.Unmarshal(manifestData, &manifest)
 
 	imagesDir := "mydocker-images"
@@ -211,7 +213,7 @@ func getDockerImage(image string) error {
 	err = os.Mkdir(imagesDir, 0755)
 	if err != nil {
 		if !os.IsExist(err) {
-			return err
+			return
 		}
 	}
 
@@ -223,14 +225,13 @@ func getDockerImage(image string) error {
 	configReq.Header.Add("Accept", manifest.Config.MediaType)
 	configResp, err := http.DefaultClient.Do(configReq)
 	if err != nil {
-		return err
+		return
 	}
 	defer configResp.Body.Close()
 	configData, err := io.ReadAll(configResp.Body)
 	if err != nil {
-		return err
+		return
 	}
-	var config Config
 	json.Unmarshal(configData, &config)
 
 	fmt.Printf("%#v\n", config)
@@ -238,39 +239,43 @@ func getDockerImage(image string) error {
 	for _, layer := range manifest.Layers {
 		layerPath := filepath.Join(imagesDir, strings.Replace(layer.Digest, ":", "_", 1))
 
-		_, err := os.Stat(layerPath)
+		_, err = os.Stat(layerPath)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return err
+				return
 			}
 		} else {
 			log.Println("skipping download for layer ", layer.Digest)
 			continue
 		}
 
-		file, err := os.Create(layerPath)
+		var file *os.File
+		file, err = os.Create(layerPath)
 		if err != nil {
-			return err
+			return
 		}
 		defer file.Close()
 
 		// https://distribution.github.io/distribution#pulling-a-layer
 
 		log.Println("downloading layer ", layer.Digest)
-		layerReq, err := http.NewRequest("GET", fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/blobs/%s", parts[0], layer.Digest), nil)
+		var layerReq *http.Request
+		layerReq, err = http.NewRequest("GET", fmt.Sprintf("https://registry.hub.docker.com/v2/library/%s/blobs/%s", parts[0], layer.Digest), nil)
 		layerReq.Header.Add("Authorization", fmt.Sprintf("Bearer %s", auth.Token))
 		layerReq.Header.Add("Accept", layer.MediaType)
-		layerResp, err := http.DefaultClient.Do(layerReq)
+		var layerResp *http.Response
+		layerResp, err = http.DefaultClient.Do(layerReq)
 		if err != nil {
-			return err
+			return
 		}
 		defer layerResp.Body.Close()
-		layerData, err := io.ReadAll(layerResp.Body)
+		var layerData []byte
+		layerData, err = io.ReadAll(layerResp.Body)
 		if err != nil {
-			return err
+			return
 		}
 		file.Write(layerData)
 	}
 
-	return nil
+	return
 }
