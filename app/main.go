@@ -62,15 +62,17 @@ func main() {
 		log.Fatal("making directory: ", err)
 	}
 
-	log.Println("copying executable")
-	err = copyFile(commandPath, commandPathTemp)
-	if err != nil {
-		log.Fatal("copying file: ", err)
-	}
-	err = os.Chmod(commandPathTemp, 0755)
-	if err != nil {
-		log.Fatal("chmod file: ", err)
-	}
+	// TEMP: temporarily disabling this to test just regular container execution
+
+	// log.Println("copying executable")
+	// err = copyFile(commandPath, commandPathTemp)
+	// if err != nil {
+	// 	log.Fatal("copying file: ", err)
+	// }
+	// err = os.Chmod(commandPathTemp, 0755)
+	// if err != nil {
+	// 	log.Fatal("chmod file: ", err)
+	// }
 
 	log.Println("running command with args")
 	log.Println("command: ", command)
@@ -289,15 +291,15 @@ func unpackLayers(targetDir string, layers []ManifestConfig) error {
 	for _, layer := range layers {
 		layerPath := filepath.Join(IMAGES_DIR, strings.Replace(layer.Digest, ":", "_", 1))
 
-		log.Printf("unpacking layer: ", layer.Digest)
+		log.Println("unpacking layer: ", layer.Digest)
 
-		file, err := os.Open(layerPath)
+		layerFile, err := os.Open(layerPath)
 		if err != nil {
 			return err
 		}
-		defer file.Close()
+		defer layerFile.Close()
 
-		gzReader, err := gzip.NewReader(file)
+		gzReader, err := gzip.NewReader(layerFile)
 		if err != nil {
 			return err
 		}
@@ -311,7 +313,59 @@ func unpackLayers(targetDir string, layers []ManifestConfig) error {
 			if err != nil {
 				return err
 			}
-			fmt.Println(header.Name)
+
+			path := filepath.Join(targetDir, header.Name)
+
+			switch header.Typeflag {
+
+			case tar.TypeSymlink:
+				log.Println("creating symlink ", path)
+				absolutePath := filepath.Join(targetDir, header.Linkname)
+				relativePath, err := filepath.Rel(filepath.Dir(path), absolutePath)
+				if err != nil {
+					return err
+				}
+				err = os.Symlink(relativePath, path)
+				if err != nil {
+					return err
+				}
+
+			case tar.TypeDir:
+				log.Println("unpacking dir ", path)
+				err := os.MkdirAll(path, header.FileInfo().Mode())
+				if err != nil {
+					return err
+				}
+
+			case tar.TypeReg:
+				log.Println("unpacking regular file ", path)
+				file, err := os.Create(path)
+				if err != nil {
+					return err
+				}
+				defer file.Close()
+				_, err = io.Copy(file, tarReader)
+				if err != nil {
+					return err
+				}
+
+			default:
+				fmt.Printf("dir: %#v\n", header)
+				panic(fmt.Sprintf("not implemented: %c", header.Typeflag))
+
+			}
+
+			err = os.Chmod(path, header.FileInfo().Mode())
+			if err != nil {
+				if !os.IsNotExist(err) {
+					return err
+				}
+			}
+
+			// err = os.Chown(path, header.Uid, header.Gid)
+			// if err != nil {
+			// 	return err
+			// }
 		}
 	}
 	return nil
