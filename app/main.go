@@ -4,6 +4,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 )
+
+const IMAGES_DIR = "mydocker-images"
 
 // Usage: your_docker.sh run <image> <command> <arg1> <arg2> ...
 func main() {
@@ -30,7 +34,7 @@ func main() {
 	command := os.Args[3]
 	args := os.Args[4:len(os.Args)]
 
-	_, _, err = getDockerImage(image)
+	manifest, _, err := getDockerImage(image)
 	if err != nil {
 		log.Fatal("getting docker image: ", err)
 	}
@@ -41,6 +45,11 @@ func main() {
 		log.Fatal("making temp directory: ", err)
 	}
 	defer os.RemoveAll(tempDir)
+
+	err = unpackLayers(tempDir, manifest.Layers)
+	if err != nil {
+		log.Fatal("unpacking layers: ", err)
+	}
 
 	log.Println("preparing chroot environment")
 	commandPath, err := filepath.Abs(command)
@@ -208,9 +217,7 @@ func getDockerImage(image string) (manifest Manifest, config Config, err error) 
 	}
 	json.Unmarshal(manifestData, &manifest)
 
-	imagesDir := "mydocker-images"
-
-	err = os.Mkdir(imagesDir, 0755)
+	err = os.Mkdir(IMAGES_DIR, 0755)
 	if err != nil {
 		if !os.IsExist(err) {
 			return
@@ -234,10 +241,8 @@ func getDockerImage(image string) (manifest Manifest, config Config, err error) 
 	}
 	json.Unmarshal(configData, &config)
 
-	fmt.Printf("%#v\n", config)
-
 	for _, layer := range manifest.Layers {
-		layerPath := filepath.Join(imagesDir, strings.Replace(layer.Digest, ":", "_", 1))
+		layerPath := filepath.Join(IMAGES_DIR, strings.Replace(layer.Digest, ":", "_", 1))
 
 		_, err = os.Stat(layerPath)
 		if err != nil {
@@ -278,4 +283,36 @@ func getDockerImage(image string) (manifest Manifest, config Config, err error) 
 	}
 
 	return
+}
+
+func unpackLayers(targetDir string, layers []ManifestConfig) error {
+	for _, layer := range layers {
+		layerPath := filepath.Join(IMAGES_DIR, strings.Replace(layer.Digest, ":", "_", 1))
+
+		log.Printf("unpacking layer: ", layer.Digest)
+
+		file, err := os.Open(layerPath)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+
+		gzReader, err := gzip.NewReader(file)
+		if err != nil {
+			return err
+		}
+
+		tarReader := tar.NewReader(gzReader)
+		for {
+			header, err := tarReader.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Println(header.Name)
+		}
+	}
+	return nil
 }
