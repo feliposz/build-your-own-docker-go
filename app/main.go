@@ -23,12 +23,16 @@ const IMAGES_DIR = "mydocker-images"
 // Usage: your_docker.sh run <image> <command> <arg1> <arg2> ...
 func main() {
 
-	logger, err := os.Create("mydocker.log")
+	logger, err := os.OpenFile("mydocker.log", os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
 	if err != nil {
 		log.Fatal("create log file: ", err)
 	}
 	log.SetOutput(logger)
 	defer logger.Close()
+
+	log.Println("=========================")
+
+	log.Println("processing command line: ", os.Args)
 
 	image := os.Args[2]
 	command := os.Args[3]
@@ -44,7 +48,6 @@ func main() {
 	if err != nil {
 		log.Fatal("making temp directory: ", err)
 	}
-	defer os.RemoveAll(tempDir)
 
 	err = unpackLayers(tempDir, manifest.Layers)
 	if err != nil {
@@ -57,22 +60,30 @@ func main() {
 		log.Fatal("getting path: ", err)
 	}
 	commandPathTemp := filepath.Join(tempDir, commandPath)
-	err = os.MkdirAll(filepath.Dir(commandPathTemp), 0755)
+
+	// If command executable is already present in unpacked image, skip copying
+
+	_, err = os.Stat(commandPathTemp)
 	if err != nil {
-		log.Fatal("making directory: ", err)
+		if !os.IsNotExist(err) {
+			log.Fatal("stat: ", err)
+		}
+
+		err = os.MkdirAll(filepath.Dir(commandPathTemp), 0755)
+		if err != nil {
+			log.Fatal("making directory: ", err)
+		}
+
+		log.Println("copying executable")
+		err = copyFile(commandPath, commandPathTemp)
+		if err != nil {
+			log.Fatal("copying file: ", err)
+		}
+		err = os.Chmod(commandPathTemp, 0755)
+		if err != nil {
+			log.Fatal("chmod file: ", err)
+		}
 	}
-
-	// TEMP: temporarily disabling this to test just regular container execution
-
-	// log.Println("copying executable")
-	// err = copyFile(commandPath, commandPathTemp)
-	// if err != nil {
-	// 	log.Fatal("copying file: ", err)
-	// }
-	// err = os.Chmod(commandPathTemp, 0755)
-	// if err != nil {
-	// 	log.Fatal("chmod file: ", err)
-	// }
 
 	log.Println("running command with args")
 	log.Println("command: ", command)
@@ -89,6 +100,12 @@ func main() {
 	err = cmd.Run()
 	if err != nil {
 		exitCode = cmd.ProcessState.ExitCode()
+	}
+
+	log.Println("removing temp dir")
+	err = os.RemoveAll(tempDir)
+	if err != nil {
+		log.Println("error removing directory: ", err)
 	}
 
 	os.Exit(exitCode)
