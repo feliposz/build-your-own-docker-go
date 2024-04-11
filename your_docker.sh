@@ -8,4 +8,6 @@
 set -e
 tmpFile=$(mktemp)
 go build -o "$tmpFile" app/*.go
-exec "$tmpFile" "$@"
+
+# HACK: Had to use sudo to circumvent limitation on chroot, since I'm not using docker itself to run tests...
+sudo "$tmpFile" "$@"
